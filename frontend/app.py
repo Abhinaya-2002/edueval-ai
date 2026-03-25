@@ -20,7 +20,6 @@ import numpy as np
 from PIL import Image
 import speech_recognition as sr
 import wave
-import pyaudio
 
 API_URL = "https://edueval-ai.onrender.com"
 
