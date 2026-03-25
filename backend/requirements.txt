@@ -11,3 +11,5 @@ sqlalchemy
 reportlab
 pydantic[email]
 python-multipart
+SpeechRecognition
+scikit-learn
