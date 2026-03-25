@@ -2,9 +2,9 @@ streamlit
 requests
 pandas
 plotly
-streamlit
-requests
-pandas
-plotly
+numpy
+opencv-python-headless
+Pillow
 reportlab
 python-dotenv
+SpeechRecognition
