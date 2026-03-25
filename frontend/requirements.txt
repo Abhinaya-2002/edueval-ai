@@ -2,3 +2,9 @@ streamlit
 requests
 pandas
 plotly
+streamlit
+requests
+pandas
+plotly
+reportlab
+python-dotenv
