@@ -10,3 +10,4 @@ openai
 sqlalchemy
 reportlab
 pydantic[email]
+python-multipart
