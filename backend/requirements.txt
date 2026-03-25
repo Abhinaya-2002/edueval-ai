@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pytesseract
+pdf2image
+opencv-python-headless
+numpy
+pandas
+python-dotenv
+openai
+sqlalchemy
+reportlab
