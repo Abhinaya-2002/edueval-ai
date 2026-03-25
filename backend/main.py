@@ -1,5 +1,5 @@
-# main.py - Complete Backend with All 11 Advanced Features
-from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Form, WebSocket, WebSocketDisconnect
+# main.py - Complete Backend for Render Deployment
+from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
@@ -14,45 +14,45 @@ import shutil
 import time
 import random
 import string
-import re
 from typing import Optional, List
 from dotenv import load_dotenv
 from openai import OpenAI
-import pytesseract
-from pdf2image import convert_from_path
-import cv2
-import numpy as np
 from difflib import SequenceMatcher
 import zipfile
-from collections import Counter
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from io import BytesIO
-import speech_recognition as sr
-import asyncio
-from sklearn.linear_model import LinearRegression
 import numpy as np
 
-# Configure pytesseract
-try:
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-except:
-    pass
-
+# Load environment variables
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ==================================
 # DATABASE SETUP
 # ==================================
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./edueval.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+# Get database URL from environment (for Render PostgreSQL)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./edueval.db")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Create engine with proper settings
+if "sqlite" in DATABASE_URL:
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Initialize OpenAI (optional, will work without API key)
+try:
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+except:
+    client = None
 
 # ==================================
 # DATABASE MODELS
@@ -102,8 +102,6 @@ class Student(Base):
     streak_days = Column(Integer, default=0)
     last_active = Column(DateTime, default=datetime.utcnow)
     badges = Column(JSON, default=[])
-    learning_style = Column(String, default="visual")
-    behavior_data = Column(JSON, default={})
     reset_token = Column(String, nullable=True)
     reset_token_expiry = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -126,43 +124,7 @@ class Exam(Base):
     status = Column(String, default="DRAFT")
     exam_data = Column(Text)
     bloom_levels = Column(JSON, default={})
-    adaptive_level = Column(String, default="standard")
     teacher = relationship("Teacher")
-
-class Assignment(Base):
-    __tablename__ = "assignments"
-    id = Column(Integer, primary_key=True, index=True)
-    assignment_id = Column(String, unique=True, index=True)
-    title = Column(String)
-    description = Column(Text)
-    subject = Column(String)
-    institution_type = Column(String, default="school")
-    class_level = Column(String)
-    section = Column(String, nullable=True)
-    program = Column(String, nullable=True)
-    total_marks = Column(Integer, default=0)
-    deadline = Column(DateTime)
-    reference_materials = Column(Text, nullable=True)
-    created_by = Column(Integer, ForeignKey("teachers.id"))
-    created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String, default="ACTIVE")
-    teacher = relationship("Teacher")
-
-class AssignmentSubmission(Base):
-    __tablename__ = "assignment_submissions"
-    id = Column(Integer, primary_key=True, index=True)
-    assignment_id = Column(Integer, ForeignKey("assignments.id"))
-    student_id = Column(Integer, ForeignKey("students.id"))
-    file_path = Column(String)
-    submitted_at = Column(DateTime, default=datetime.utcnow)
-    marks_awarded = Column(Integer, default=0)
-    ai_feedback = Column(Text, nullable=True)
-    teacher_feedback = Column(Text, nullable=True)
-    instant_feedback = Column(Text, nullable=True)
-    plagiarism_score = Column(Float, default=0.0)
-    status = Column(String, default="SUBMITTED")
-    assignment = relationship("Assignment")
-    student = relationship("Student")
 
 class Question(Base):
     __tablename__ = "questions"
@@ -171,13 +133,10 @@ class Question(Base):
     question_number = Column(Integer)
     question_type = Column(String)
     question_text = Column(Text)
-    question_text_tamil = Column(Text, nullable=True)
-    question_text_hindi = Column(Text, nullable=True)
     max_marks = Column(Integer)
     correct_option = Column(String, nullable=True)
     teacher_final_answer = Column(Text, nullable=True)
     bloom_level = Column(String)
-    difficulty = Column(String, default="medium")
     exam = relationship("Exam")
 
 class Option(Base):
@@ -185,8 +144,6 @@ class Option(Base):
     id = Column(Integer, primary_key=True, index=True)
     question_id = Column(Integer, ForeignKey("questions.id"))
     option_text = Column(String)
-    option_text_tamil = Column(String, nullable=True)
-    option_text_hindi = Column(String, nullable=True)
     is_correct = Column(Boolean, default=False)
     question = relationship("Question")
 
@@ -197,21 +154,14 @@ class Submission(Base):
     exam_id = Column(Integer, ForeignKey("exams.id"))
     uploaded_pdf_path = Column(String)
     extracted_text = Column(Text, nullable=True)
-    time_taken = Column(Integer, default=0)
     ai_total_marks = Column(Integer, default=0)
     final_total_marks = Column(Integer, default=0)
     ai_feedback_summary = Column(Text, nullable=True)
     improvement_suggestions = Column(Text, nullable=True)
-    subject_wise_insights = Column(JSON, default={})
-    mistake_analysis = Column(JSON, default={})
     weak_topics = Column(JSON, default=[])
-    learning_path = Column(JSON, default={})
-    grading_mode = Column(String, default="STRICT")
     risk_level = Column(String, default="LOW")
     risk_factors = Column(JSON, default=[])
     status = Column(String, default="UPLOADED")
-    retake_count = Column(Integer, default=0)
-    predicted_next_score = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
     student = relationship("Student")
     exam = relationship("Exam")
@@ -223,12 +173,9 @@ class StudentResponse(Base):
     student_id = Column(Integer, ForeignKey("students.id"))
     question_id = Column(Integer, ForeignKey("questions.id"))
     answer_text = Column(Text, nullable=True)
-    answer_audio_path = Column(String, nullable=True)
     ai_is_correct = Column(Boolean, nullable=True)
     ai_marks_awarded = Column(Integer, default=0)
     ai_feedback = Column(Text, nullable=True)
-    ai_explanation = Column(Text, nullable=True)
-    mistake_type = Column(String, nullable=True)
     teacher_marks_awarded = Column(Integer, default=0)
     teacher_feedback = Column(Text, nullable=True)
     teacher_override = Column(Boolean, default=False)
@@ -237,52 +184,6 @@ class StudentResponse(Base):
     submission = relationship("Submission")
     student = relationship("Student")
     question = relationship("Question")
-
-class DiscussionPost(Base):
-    __tablename__ = "discussion_posts"
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"))
-    exam_id = Column(Integer, ForeignKey("exams.id"))
-    question_id = Column(Integer, ForeignKey("questions.id"), nullable=True)
-    content = Column(Text)
-    answer_reference = Column(Text, nullable=True)
-    likes = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    student = relationship("Student")
-    exam = relationship("Exam")
-
-class RevisionReminder(Base):
-    __tablename__ = "revision_reminders"
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"))
-    topic = Column(String)
-    scheduled_date = Column(Date)
-    is_completed = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    student = relationship("Student")
-
-class Certificate(Base):
-    __tablename__ = "certificates"
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"))
-    exam_id = Column(Integer, ForeignKey("exams.id"))
-    certificate_number = Column(String, unique=True)
-    score = Column(Integer)
-    percentage = Column(Float)
-    issued_at = Column(DateTime, default=datetime.utcnow)
-    student = relationship("Student")
-    exam = relationship("Exam")
-
-class Recommendation(Base):
-    __tablename__ = "recommendations"
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"))
-    topic = Column(String)
-    video_url = Column(String)
-    video_title = Column(String)
-    difficulty_level = Column(String, default="Beginner")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    student = relationship("Student")
 
 class Notification(Base):
     __tablename__ = "notifications"
@@ -318,25 +219,6 @@ class CareerGuidance(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     student = relationship("Student")
 
-class PracticeTest(Base):
-    __tablename__ = "practice_tests"
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"))
-    topic = Column(String)
-    questions = Column(JSON, default=[])
-    score = Column(Integer, default=0)
-    completed = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    student = relationship("Student")
-
-class Badge(Base):
-    __tablename__ = "badges"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    description = Column(String)
-    icon = Column(String)
-    criteria = Column(String)
-
 class Leaderboard(Base):
     __tablename__ = "leaderboard"
     id = Column(Integer, primary_key=True, index=True)
@@ -348,6 +230,15 @@ class Leaderboard(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
     student = relationship("Student")
 
+class Badge(Base):
+    __tablename__ = "badges"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    description = Column(String)
+    icon = Column(String)
+    criteria = Column(String)
+
+# Create tables
 Base.metadata.create_all(bind=engine)
 
 # ==================================
@@ -429,31 +320,12 @@ class ExamRequest(BaseModel):
     partA_bloom: str
     partB_bloom: str
     partC_bloom: str
-    adaptive_level: str = "standard"
-
-class AssignmentRequest(BaseModel):
-    title: str
-    description: str
-    subject: str
-    institution_type: str
-    class_level: str
-    section: Optional[str] = None
-    program: Optional[str] = None
-    total_marks: int
-    deadline: str
-    reference_materials: Optional[str] = None
 
 class TeacherReviewItem(BaseModel):
     response_id: int
     teacher_marks: int
     teacher_feedback: Optional[str] = None
     teacher_override: bool = True
-
-class VoiceAnswerRequest(BaseModel):
-    student_id: int
-    exam_id: int
-    question_id: int
-    audio_base64: str
 
 # ==================================
 # APPLICATION SETTINGS
@@ -466,14 +338,9 @@ APP_SETTINGS = {
     "MAX_RETAKE_ATTEMPTS": 3
 }
 
+# Create folders
 UPLOAD_FOLDER = "uploads"
-ASSIGNMENT_FOLDER = "assignments"
-AUDIO_FOLDER = "audio"
-BULK_UPLOAD_FOLDER = "bulk_uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(ASSIGNMENT_FOLDER, exist_ok=True)
-os.makedirs(AUDIO_FOLDER, exist_ok=True)
-os.makedirs(BULK_UPLOAD_FOLDER, exist_ok=True)
 
 DEFAULT_ADMIN = {
     "admin_id": "ADMIN001",
@@ -484,294 +351,155 @@ DEFAULT_ADMIN = {
 
 DEFAULT_BADGES = [
     {"name": "First Exam", "description": "Completed your first exam", "icon": "🎓", "criteria": "first_exam"},
-    {"name": "Perfect Score", "description": "Scored 100% in an exam", "icon": "⭐", "criteria": "perfect_score"},
-    {"name": "Consistent Learner", "description": "7-day learning streak", "icon": "🔥", "criteria": "streak_7"},
-    {"name": "Quick Learner", "description": "Improved score by 20%", "icon": "📈", "criteria": "improvement_20"},
-    {"name": "Assignment Master", "description": "Submitted 5 assignments", "icon": "📝", "criteria": "assignments_5"},
-    {"name": "Top Performer", "description": "Ranked in top 3", "icon": "🏆", "criteria": "top_3"},
-    {"name": "Voice Champion", "description": "Used voice input", "icon": "🎙️", "criteria": "voice_input"},
+    {"name": "Perfect Score", "description": "Scored 100%", "icon": "⭐", "criteria": "perfect_score"},
+    {"name": "Consistent Learner", "description": "7-day streak", "icon": "🔥", "criteria": "streak_7"},
+    {"name": "Assignment Master", "description": "5 assignments", "icon": "📝", "criteria": "assignments_5"},
 ]
 
 # ==================================
 # HELPER FUNCTIONS
 # ==================================
 
-def preprocess_image_for_ocr(image_bytes):
-    try:
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            return image_bytes
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        denoised = cv2.medianBlur(thresh, 3)
-        _, buffer = cv2.imencode('.png', denoised)
-        return buffer.tobytes()
-    except:
-        return image_bytes
-
-def extract_text_from_image(file_path):
-    try:
-        if file_path.lower().endswith('.pdf'):
-            images = convert_from_path(file_path, first_page=1, last_page=1)
-            text = ""
-            for img in images:
-                text += pytesseract.image_to_string(img)
-            return text
-        else:
-            img = cv2.imread(file_path)
-            text = pytesseract.image_to_string(img)
-            return text
-    except:
-        return ""
-
-def extract_text_from_file(file_path):
-    if file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-        return extract_text_from_image(file_path)
-    elif file_path.lower().endswith('.pdf'):
-        try:
-            images = convert_from_path(file_path)
-            text = ""
-            for img in images:
-                text += pytesseract.image_to_string(img)
-            return text
-        except:
-            return ""
-    return ""
-
-def speech_to_text(audio_bytes):
-    try:
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(BytesIO(audio_bytes)) as source:
-            audio = recognizer.record(source)
-            text = recognizer.recognize_google(audio)
-            return text
-    except:
-        return ""
-
-def generate_ai_explanation(question, student_answer, correct_answer, marks_awarded, max_marks):
-    try:
-        prompt = f"""
-        Question: {question}
-        Student Answer: {student_answer}
-        Correct Answer: {correct_answer}
-        Marks: {marks_awarded}/{max_marks}
-        
-        Explain:
-        1. What was wrong
-        2. Specific mistakes
-        3. How to correct
-        4. Key points to remember
-        """
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=400
-        )
-        return response.choices[0].message.content
-    except:
-        return f"Score: {marks_awarded}/{max_marks}. Review the correct answer."
-
-def predict_future_score(student_id, db):
-    submissions = db.query(Submission).filter(Submission.student_id == student_id).order_by(Submission.created_at).all()
-    if len(submissions) < 3:
-        return 0.0
-    scores = []
-    for s in submissions:
-        exam = db.query(Exam).filter(Exam.id == s.exam_id).first()
-        if exam and exam.total_marks:
-            scores.append((s.final_total_marks / exam.total_marks) * 100)
-    if len(scores) < 3:
-        return 0.0
-    X = np.array(range(len(scores))).reshape(-1, 1)
-    y = np.array(scores)
-    model = LinearRegression()
-    model.fit(X, y)
-    return max(0, min(100, model.predict([[len(scores)]])[0]))
-
-def analyze_student_behavior(student_id, db):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    submissions = db.query(Submission).filter(Submission.student_id == student_id).order_by(Submission.created_at).all()
-    behavior = {"total_exams": len(submissions), "average_time": 0, "improvement_rate": 0, "consistency": "Low", "learning_pace": "Average", "recommendations": []}
-    if submissions:
-        times = [s.time_taken for s in submissions if s.time_taken > 0]
-        if times:
-            behavior["average_time"] = sum(times) / len(times)
-        scores = []
-        for s in submissions:
-            exam = db.query(Exam).filter(Exam.id == s.exam_id).first()
-            if exam and exam.total_marks:
-                scores.append((s.final_total_marks / exam.total_marks) * 100)
-        if len(scores) >= 2:
-            improvement = scores[-1] - scores[0]
-            behavior["improvement_rate"] = improvement
-            if improvement > 20:
-                behavior["learning_pace"] = "Fast"
-                behavior["recommendations"].append("You're improving quickly!")
-            elif improvement > 5:
-                behavior["learning_pace"] = "Steady"
-                behavior["recommendations"].append("Good steady progress.")
-            else:
-                behavior["learning_pace"] = "Slow"
-                behavior["recommendations"].append("Need more consistent practice.")
-        if len(scores) >= 3:
-            variance = np.var(scores)
-            if variance < 100:
-                behavior["consistency"] = "High"
-            elif variance < 300:
-                behavior["consistency"] = "Medium"
-            else:
-                behavior["consistency"] = "Low"
-    return behavior
-
-def generate_adaptive_questions(question, difficulty):
-    try:
-        prompt = f"Generate similar question with {difficulty} difficulty. Original: {question}"
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=300
-        )
-        return {"question": response.choices[0].message.content, "options": ["A) Option1", "B) Option2", "C) Option3", "D) Option4"], "correct": "A"}
-    except:
-        return {"question": question, "options": ["A) Option1", "B) Option2", "C) Option3", "D) Option4"], "correct": "A"}
-
-def generate_certificate(student_id, exam_id, db):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    submission = db.query(Submission).filter(Submission.student_id == student_id, Submission.exam_id == exam_id).first()
-    if not student or not exam or not submission:
-        return None
-    percentage = (submission.final_total_marks / exam.total_marks) * 100 if exam.total_marks else 0
-    cert_number = f"CERT-{student.student_id}-{exam.exam_id}-{datetime.now().strftime('%Y%m%d')}"
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elements = []
-    styles = getSampleStyleSheet()
-    elements.append(Paragraph("Certificate of Achievement", ParagraphStyle('CertTitle', parent=styles['Heading1'], fontSize=28, alignment=TA_CENTER, spaceAfter=30)))
-    elements.append(Spacer(1, 20))
-    elements.append(Paragraph(f"This certifies that", styles['Normal']))
-    elements.append(Spacer(1, 10))
-    elements.append(Paragraph(student.name, ParagraphStyle('Name', parent=styles['Heading1'], fontSize=24, alignment=TA_CENTER, spaceAfter=20)))
-    elements.append(Spacer(1, 10))
-    elements.append(Paragraph(f"has successfully completed the examination in", styles['Normal']))
-    elements.append(Paragraph(f"<b>{exam.subject} - {exam.chapter}</b>", styles['Normal']))
-    elements.append(Paragraph(f"with a score of <b>{submission.final_total_marks}/{exam.total_marks}</b> marks ({percentage:.1f}%)", styles['Normal']))
-    elements.append(Spacer(1, 20))
-    elements.append(Paragraph(f"Certificate Number: {cert_number}", styles['Normal']))
-    elements.append(Paragraph(f"Issued on: {datetime.now().strftime('%B %d, %Y')}", styles['Normal']))
-    doc.build(elements)
-    buffer.seek(0)
-    cert = Certificate(student_id=student_id, exam_id=exam_id, certificate_number=cert_number, score=submission.final_total_marks, percentage=percentage)
-    db.add(cert)
-    db.commit()
-    return buffer
-
-def get_question_text(question, language):
-    if language == "tamil" and question.question_text_tamil:
-        return question.question_text_tamil
-    elif language == "hindi" and question.question_text_hindi:
-        return question.question_text_hindi
-    return question.question_text
-
 def generate_reset_token():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
-
-def send_reset_email(email, token, user_type):
-    print(f"Reset link: http://localhost:8000/reset-password?token={token}&type={user_type}")
-    return True
 
 def calculate_similarity(text1, text2):
     if not text1 or not text2:
         return 0.0
     return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
 
-def analyze_mistakes(student_answer, correct_answer):
-    mistakes = []
-    if not student_answer or student_answer.strip() == "":
-        mistakes.append("No answer provided")
-        return mistakes
-    student_lower = student_answer.lower()
-    correct_lower = correct_answer.lower()
-    if len(student_answer) < len(correct_answer) * 0.5:
-        mistakes.append("Answer is incomplete")
-    return mistakes if mistakes else ["Minor improvements needed"]
-
-def generate_learning_path(weak_topics, student_score):
-    learning_path = {"daily_plan": [], "resources": [], "estimated_days": 0, "intensity": "Medium", "recommended_hours": 2}
-    if not weak_topics:
-        return learning_path
-    days = []
-    for i, topic in enumerate(weak_topics[:5]):
-        days.append({"day": i+1, "topic": topic, "activities": [f"Read about {topic}", f"Watch video on {topic}", f"Practice 5 questions", f"Take mini-test"]})
-        learning_path["resources"].append({"topic": topic, "video": f"https://www.youtube.com/results?search_query={topic.replace(' ', '+')}+tutorial"})
-    learning_path["daily_plan"] = days
-    learning_path["estimated_days"] = len(weak_topics[:5])
-    if student_score < 40:
-        learning_path["intensity"] = "High"
-        learning_path["recommended_hours"] = 3
-    elif student_score < 60:
-        learning_path["intensity"] = "Medium"
-        learning_path["recommended_hours"] = 2
+def get_ai_evaluation(student_answer, correct_answer, max_marks):
+    """Simple evaluation using similarity matching"""
+    similarity = calculate_similarity(student_answer, correct_answer)
+    marks = int(similarity * max_marks)
+    
+    if marks >= max_marks * 0.8:
+        feedback = "Excellent! Great understanding."
+    elif marks >= max_marks * 0.6:
+        feedback = "Good answer! Some minor improvements needed."
+    elif marks >= max_marks * 0.4:
+        feedback = "Fair answer. Review the key concepts."
     else:
-        learning_path["intensity"] = "Low"
-        learning_path["recommended_hours"] = 1
-    return learning_path
+        feedback = "Needs improvement. Please review the topic thoroughly."
+    
+    return {"marks": marks, "feedback": feedback}
 
-def generate_practice_test(topic, num_questions=5):
-    try:
-        prompt = f"Generate {num_questions} practice questions on {topic}. Return JSON with questions array."
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], temperature=0.7, max_tokens=1000)
-        return {"topic": topic, "questions": [{"question": f"Question on {topic}", "options": ["A) Opt1", "B) Opt2", "C) Opt3", "D) Opt4"], "correct": "A", "explanation": "Explanation"}]}
-    except:
-        return {"topic": topic, "questions": [{"question": f"Sample question on {topic}", "options": ["A) Opt1", "B) Opt2", "C) Opt3", "D) Opt4"], "correct": "A", "explanation": "Explanation"}]}
+def get_ai_chat_response(message, user_context=""):
+    """Simple chat response"""
+    message_lower = message.lower()
+    
+    if "exam" in message_lower:
+        return "I can help you prepare for exams! Focus on understanding concepts, practice regularly, and review weak topics. Would you like specific study tips?"
+    elif "study" in message_lower:
+        return "Effective study tips: 1) Set a schedule, 2) Take breaks, 3) Practice actively, 4) Review regularly. What subject are you studying?"
+    elif "career" in message_lower:
+        return "Career guidance: Identify your interests, develop relevant skills, gain experience through internships, and network with professionals. What field interests you?"
+    else:
+        return "I'm your AI Learning Assistant! I can help with exam preparation, study tips, concept explanations, and career guidance. What would you like to know?"
 
-def generate_smart_report_card(submission_id, db):
-    submission = db.query(Submission).filter(Submission.id == submission_id).first()
-    if not submission:
-        return None
-    exam = db.query(Exam).filter(Exam.id == submission.exam_id).first()
-    student = db.query(Student).filter(Student.id == submission.student_id).first()
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elements = []
-    styles = getSampleStyleSheet()
-    percentage = (submission.final_total_marks / exam.total_marks * 100) if exam and exam.total_marks else 0
-    elements.append(Paragraph("Smart Report Card", ParagraphStyle('Title', parent=styles['Heading1'], fontSize=20, alignment=TA_CENTER, spaceAfter=20)))
-    elements.append(Table([["Student", student.name], ["Exam", exam.exam_id], ["Score", f"{submission.final_total_marks}/{exam.total_marks}"], ["Percentage", f"{percentage:.1f}%"]], colWidths=[100, 250]))
-    if submission.ai_feedback_summary:
-        elements.append(Paragraph("Feedback", styles["Heading2"]))
-        elements.append(Paragraph(submission.ai_feedback_summary, styles["Normal"]))
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
+def generate_exam_ai(subject, chapter, class_level, duration, partA_bloom, partB_bloom, partC_bloom):
+    """Generate sample exam"""
+    return json.dumps({
+        "subject": subject,
+        "chapter": chapter,
+        "class_level": class_level,
+        "duration": duration,
+        "total_marks": 49,
+        "parts": {
+            "Part A - MCQ": {
+                "type": "MCQ",
+                "marks_per_question": 1,
+                "bloom_level": partA_bloom,
+                "questions": [
+                    {"question": f"What is the main concept of {chapter}?", "options": ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"], "correct": "A", "answer": f"The correct answer is A."}
+                ]
+            },
+            "Part B - Short Answer": {
+                "type": "Short Answer",
+                "marks_per_question": 2,
+                "bloom_level": partB_bloom,
+                "questions": [
+                    {"question": f"Explain the concept of {chapter}.", "answer": f"This is a model answer explaining the key concepts."}
+                ]
+            },
+            "Part C - Long Answer": {
+                "type": "Long Answer",
+                "marks_per_question": 5,
+                "bloom_level": partC_bloom,
+                "questions": [
+                    {"question": f"Describe in detail about {chapter}.", "answer": f"This is a detailed model answer."}
+                ]
+            }
+        }
+    })
 
-def award_badges(student_id, db):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        return
-    submissions = db.query(Submission).filter(Submission.student_id == student_id).all()
-    assignments = db.query(AssignmentSubmission).filter(AssignmentSubmission.student_id == student_id).all()
-    current_badges = student.badges or []
-    current_names = [b.get("name") for b in current_badges]
-    if len(submissions) >= 1 and "First Exam" not in current_names:
-        current_badges.append({"name": "First Exam", "description": "Completed first exam", "icon": "🎓", "earned_at": datetime.utcnow().isoformat()})
-    if len(assignments) >= 5 and "Assignment Master" not in current_names:
-        current_badges.append({"name": "Assignment Master", "description": "Submitted 5 assignments", "icon": "📝", "earned_at": datetime.utcnow().isoformat()})
-    student.badges = current_badges
+def save_exam_to_db(db, metadata, exam_data, teacher_id):
+    total_marks = exam_data.get("total_marks", 49)
+    
+    exam = Exam(
+        exam_id=metadata["exam_id"],
+        subject=exam_data.get("subject"),
+        chapter=exam_data.get("chapter"),
+        class_level=exam_data.get("class_level"),
+        duration=exam_data.get("duration"),
+        total_marks=total_marks,
+        created_by=teacher_id,
+        created_at=datetime.fromisoformat(metadata["created_at"]),
+        status=metadata["status"],
+        exam_data=json.dumps(exam_data)
+    )
+    db.add(exam)
     db.commit()
-    update_leaderboard(student_id, db)
+    db.refresh(exam)
+    
+    parts = exam_data.get("parts", {})
+    q_number = 1
+    
+    for part_name, part_data in parts.items():
+        marks_per_q = part_data.get("marks_per_question", 1)
+        for q in part_data["questions"]:
+            question = Question(
+                exam_id=exam.id,
+                question_number=q_number,
+                question_type=part_data["type"],
+                question_text=q["question"],
+                max_marks=marks_per_q,
+                correct_option=q.get("correct"),
+                teacher_final_answer=q.get("answer"),
+                bloom_level=part_data.get("bloom_level", "Remember")
+            )
+            db.add(question)
+            db.flush()
+            
+            if part_data["type"] == "MCQ" and "options" in q:
+                for opt in q["options"]:
+                    option = Option(
+                        question_id=question.id,
+                        option_text=opt,
+                        is_correct=opt.startswith(q.get("correct", ""))
+                    )
+                    db.add(option)
+            
+            q_number += 1
+    
+    db.commit()
+    return exam
+
+def create_notification(db, student_id=None, teacher_id=None, title="", message="", type="", related_id=None):
+    if student_id:
+        notification = Notification(student_id=student_id, title=title, message=message, type=type, related_id=related_id)
+        db.add(notification)
+    if teacher_id:
+        notification = Notification(teacher_id=teacher_id, title=title, message=message, type=type, related_id=related_id)
+        db.add(notification)
+    db.commit()
 
 def update_leaderboard(student_id, db):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        return
     submissions = db.query(Submission).filter(Submission.student_id == student_id).all()
     total_score = sum(s.final_total_marks for s in submissions)
     exams_taken = len(submissions)
     avg_score = total_score / exams_taken if exams_taken > 0 else 0
+    
     entry = db.query(Leaderboard).filter(Leaderboard.student_id == student_id).first()
     if entry:
         entry.total_score = total_score
@@ -782,103 +510,94 @@ def update_leaderboard(student_id, db):
         entry = Leaderboard(student_id=student_id, total_score=total_score, exams_taken=exams_taken, average_score=avg_score)
         db.add(entry)
     db.commit()
-    all_entries = db.query(Leaderboard).order_by(Leaderboard.average_score.desc()).all()
-    for idx, e in enumerate(all_entries):
-        e.rank = idx + 1
-    db.commit()
-    if entry.rank <= 3:
-        badges = student.badges or []
-        if "Top Performer" not in [b.get("name") for b in badges]:
-            badges.append({"name": "Top Performer", "description": "Top 3", "icon": "🏆", "earned_at": datetime.utcnow().isoformat()})
-            student.badges = badges
-            db.commit()
 
 def get_leaderboard(db, limit=10):
     entries = db.query(Leaderboard).order_by(Leaderboard.average_score.desc()).limit(limit).all()
-    return [{"rank": e.rank, "name": db.query(Student).filter(Student.id == e.student_id).first().name, "average_score": round(e.average_score, 2), "exams_taken": e.exams_taken} for e in entries if db.query(Student).filter(Student.id == e.student_id).first()]
+    result = []
+    for e in entries:
+        student = db.query(Student).filter(Student.id == e.student_id).first()
+        if student:
+            result.append({
+                "rank": e.rank,
+                "name": student.name,
+                "average_score": round(e.average_score, 2),
+                "exams_taken": e.exams_taken
+            })
+    return result
 
-def get_ai_chat_response_with_context(message, student_id, db):
-    student = db.query(Student).filter(Student.id == student_id).first() if student_id else None
-    weak_topics = []
-    if student:
-        submissions = db.query(Submission).filter(Submission.student_id == student_id).order_by(Submission.created_at.desc()).limit(3).all()
-        for s in submissions:
-            if s.weak_topics:
-                weak_topics.extend(s.weak_topics[:3])
-        weak_topics = list(set(weak_topics))
-    context = f"Student weak topics: {', '.join(weak_topics[:3])}. " if weak_topics else ""
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": f"You are EduEval AI Assistant. Context: {context}"}, {"role": "user", "content": message}],
-            temperature=0.7, max_tokens=500
-        )
-        return response.choices[0].message.content
-    except:
-        return f"I'm here to help! Focus on {', '.join(weak_topics[:2]) if weak_topics else 'key concepts'}."
-
-def get_ai_evaluation(student_answer, correct_answer, max_marks):
-    try:
-        prompt = f"Evaluate: Correct: {correct_answer}, Student: {student_answer}, Max: {max_marks}. Return JSON: {{'marks': number, 'feedback': 'text'}}"
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], temperature=0.5, max_tokens=300)
-        import json
-        content = response.choices[0].message.content.replace("```json", "").replace("```", "").strip()
-        return json.loads(content)
-    except:
-        similarity = calculate_similarity(student_answer, correct_answer)
-        return {"marks": int(similarity * max_marks), "feedback": f"Matches {similarity*100:.0f}%"}
-
-def generate_exam_ai(subject, chapter, class_level, duration, partA_bloom, partB_bloom, partC_bloom):
-    try:
-        prompt = f"Generate exam for {subject}-{chapter} for {class_level}. Duration: {duration}. Part A: 10 MCQ at {partA_bloom} (1 mark), Part B: 7 Short at {partB_bloom} (2 marks), Part C: 5 Long at {partC_bloom} (5 marks). Return JSON."
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], temperature=0.7, max_tokens=2000)
-        return response.choices[0].message.content
-    except:
-        return json.dumps({"subject": subject, "chapter": chapter, "total_marks": 49, "parts": {"Part A": {"type": "MCQ", "questions": [{"question": f"Sample MCQ", "options": ["A) Opt1", "B) Opt2", "C) Opt3", "D) Opt4"], "correct": "A"}]}}})
-
-def save_exam_to_db(db, metadata, exam_data, teacher_id):
-    exam = Exam(
-        exam_id=metadata["exam_id"], subject=exam_data.get("subject"), chapter=exam_data.get("chapter"),
-        class_level=exam_data.get("class_level"), duration=exam_data.get("duration"),
-        total_marks=exam_data.get("total_marks", 49), created_by=teacher_id,
-        created_at=datetime.fromisoformat(metadata["created_at"]), status=metadata["status"],
-        exam_data=json.dumps(exam_data)
-    )
-    db.add(exam)
+def award_badges(student_id, db):
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        return
+    
+    submissions = db.query(Submission).filter(Submission.student_id == student_id).all()
+    current_badges = student.badges or []
+    current_names = [b.get("name") for b in current_badges]
+    
+    if len(submissions) >= 1 and "First Exam" not in current_names:
+        current_badges.append({"name": "First Exam", "description": "Completed first exam", "icon": "🎓", "earned_at": datetime.utcnow().isoformat()})
+    
+    student.badges = current_badges
     db.commit()
-    db.refresh(exam)
-    return exam
-
-def create_notification(db, student_id=None, teacher_id=None, title="", message="", type="", related_id=None):
-    if student_id:
-        db.add(Notification(student_id=student_id, title=title, message=message, type=type, related_id=related_id))
-    if teacher_id:
-        db.add(Notification(teacher_id=teacher_id, title=title, message=message, type=type, related_id=related_id))
-    db.commit()
-
-def generate_youtube_recommendations(topic):
-    return [{"title": f"Learn {topic}", "url": f"https://www.youtube.com/results?search_query={topic.replace(' ', '+')}+tutorial", "duration": "10 mins"}]
 
 # ==================================
 # FASTAPI APP
 # ==================================
 
 app = FastAPI(title="EduEval AI", version="6.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-@app.on_event("startup")
-def startup():
-    db = SessionLocal()
-    if not db.query(Admin).filter(Admin.username == DEFAULT_ADMIN["username"]).first():
-        db.add(Admin(**DEFAULT_ADMIN))
-    for badge in DEFAULT_BADGES:
-        if not db.query(Badge).filter(Badge.name == badge["name"]).first():
-            db.add(Badge(**badge))
-    db.commit()
-    db.close()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ==================================
-# ENDPOINTS
+# INITIALIZATION
+# ==================================
+
+@app.on_event("startup")
+def startup_event():
+    print("Creating database tables...")
+    Base.metadata.create_all(bind=engine)
+    
+    db = SessionLocal()
+    try:
+        admin = db.query(Admin).filter(Admin.username == DEFAULT_ADMIN["username"]).first()
+        if not admin:
+            print("Creating default admin...")
+            admin = Admin(**DEFAULT_ADMIN)
+            db.add(admin)
+            db.commit()
+            print("Admin created successfully!")
+        
+        for badge in DEFAULT_BADGES:
+            existing = db.query(Badge).filter(Badge.name == badge["name"]).first()
+            if not existing:
+                db.add(Badge(**badge))
+        db.commit()
+        print("Database initialization complete!")
+    except Exception as e:
+        print(f"Error during startup: {e}")
+    finally:
+        db.close()
+
+# ==================================
+# HEALTH ENDPOINTS
+# ==================================
+
+@app.get("/")
+def root():
+    return {"message": "EduEval AI API is running", "status": "healthy", "version": "6.0"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+# ==================================
+# ADMIN ENDPOINTS
 # ==================================
 
 @app.post("/admin/login")
@@ -888,7 +607,13 @@ def admin_login(request: AdminLogin, db: Session = Depends(get_db)):
 
 @app.get("/admin/pending-teachers")
 def get_pending_teachers(db: Session = Depends(get_db)):
-    return [{"id": t.id, "name": t.name, "email": t.email, "subject": t.subject} for t in db.query(Teacher).filter(Teacher.status == "PENDING").all()]
+    teachers = db.query(Teacher).filter(Teacher.status == "PENDING").all()
+    return [{"id": t.id, "name": t.name, "email": t.email, "subject": t.subject} for t in teachers]
+
+@app.get("/admin/approved-teachers")
+def get_approved_teachers(db: Session = Depends(get_db)):
+    teachers = db.query(Teacher).filter(Teacher.status == "APPROVED").all()
+    return [{"id": t.id, "name": t.name, "email": t.email, "subject": t.subject} for t in teachers]
 
 @app.post("/admin/approve-teacher")
 def approve_teacher(request: TeacherApprove, db: Session = Depends(get_db)):
@@ -897,213 +622,452 @@ def approve_teacher(request: TeacherApprove, db: Session = Depends(get_db)):
         teacher.status = request.status
         teacher.approved_at = datetime.utcnow()
         db.commit()
-    return {"success": True}
+        return {"success": True}
+    return {"success": False}
+
+# ==================================
+# TEACHER ENDPOINTS
+# ==================================
 
 @app.post("/teacher/register")
 def teacher_register(request: TeacherRegister, db: Session = Depends(get_db)):
-    if db.query(Teacher).filter((Teacher.email == request.email) | (Teacher.teacher_id == request.teacher_id)).first():
-        return {"success": False, "message": "Exists"}
-    db.add(Teacher(**request.dict(), status="PENDING"))
+    existing = db.query(Teacher).filter((Teacher.email == request.email) | (Teacher.teacher_id == request.teacher_id)).first()
+    if existing:
+        return {"success": False, "message": "Email or Teacher ID already exists"}
+    
+    teacher = Teacher(**request.dict(), status="PENDING")
+    db.add(teacher)
     db.commit()
-    return {"success": True}
+    return {"success": True, "message": "Registration successful! Waiting for admin approval."}
 
 @app.post("/teacher/login")
 def teacher_login(request: TeacherLogin, db: Session = Depends(get_db)):
     teacher = db.query(Teacher).filter(Teacher.email == request.email, Teacher.password == request.password).first()
-    if not teacher or teacher.status != "APPROVED":
-        return {"success": False}
+    if not teacher:
+        return {"success": False, "message": "Invalid credentials"}
+    if teacher.status != "APPROVED":
+        return {"success": False, "message": f"Account pending approval"}
     return {"success": True, "teacher_id": teacher.id, "name": teacher.name, "subject": teacher.subject}
+
+@app.post("/teacher/forgot-password")
+def teacher_forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    teacher = db.query(Teacher).filter(Teacher.email == request.email).first()
+    if not teacher:
+        return {"success": False, "message": "Email not found"}
+    token = generate_reset_token()
+    teacher.reset_token = token
+    teacher.reset_token_expiry = datetime.utcnow() + timedelta(hours=24)
+    db.commit()
+    return {"success": True, "message": "Reset link sent"}
+
+@app.post("/teacher/reset-password")
+def teacher_reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    teacher = db.query(Teacher).filter(Teacher.reset_token == request.token, Teacher.reset_token_expiry > datetime.utcnow()).first()
+    if not teacher:
+        return {"success": False, "message": "Invalid token"}
+    teacher.password = request.new_password
+    teacher.reset_token = None
+    teacher.reset_token_expiry = None
+    db.commit()
+    return {"success": True, "message": "Password reset"}
+
+# ==================================
+# STUDENT ENDPOINTS
+# ==================================
 
 @app.post("/student/register")
 def student_register(request: StudentRegister, db: Session = Depends(get_db)):
-    if db.query(Student).filter(Student.student_id == request.student_id).first():
-        return {"success": False, "message": "ID exists"}
-    db.add(Student(**request.dict()))
+    existing = db.query(Student).filter(Student.student_id == request.student_id).first()
+    if existing:
+        return {"success": False, "message": "Student ID already exists"}
+    
+    student = Student(**request.dict())
+    db.add(student)
     db.commit()
-    return {"success": True}
+    return {"success": True, "message": "Student registered successfully"}
 
 @app.post("/student/login")
 def student_login(request: StudentLogin, db: Session = Depends(get_db)):
     student = db.query(Student).filter(Student.student_id == request.student_id, Student.password == request.password).first()
     if not student:
-        return {"success": False}
+        return {"success": False, "message": "Invalid credentials"}
+    
+    # Update streak
+    today = datetime.utcnow().date()
+    if student.last_active.date() == today - timedelta(days=1):
+        student.streak_days += 1
+    elif student.last_active.date() < today - timedelta(days=1):
+        student.streak_days = 1
     student.last_active = datetime.utcnow()
-    student.streak_days = (student.streak_days + 1) if student.last_active.date() == datetime.utcnow().date() - timedelta(days=1) else 1
     db.commit()
-    award_badges(student.id, db)
-    return {"success": True, "student_id": student.id, "name": student.name, "class_level": student.class_level, "language": student.language, "streak_days": student.streak_days, "badges": student.badges}
+    
+    return {"success": True, "student_id": student.id, "name": student.name, "class_level": student.class_level, "streak_days": student.streak_days, "badges": student.badges}
+
+@app.post("/student/forgot-password")
+def student_forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    student = db.query(Student).filter(Student.email == request.email).first()
+    if not student:
+        return {"success": False, "message": "Email not found"}
+    token = generate_reset_token()
+    student.reset_token = token
+    student.reset_token_expiry = datetime.utcnow() + timedelta(hours=24)
+    db.commit()
+    return {"success": True, "message": "Reset link sent"}
+
+@app.post("/student/reset-password")
+def student_reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    student = db.query(Student).filter(Student.reset_token == request.token, Student.reset_token_expiry > datetime.utcnow()).first()
+    if not student:
+        return {"success": False, "message": "Invalid token"}
+    student.password = request.new_password
+    student.reset_token = None
+    student.reset_token_expiry = None
+    db.commit()
+    return {"success": True, "message": "Password reset"}
+
+# ==================================
+# CHAT ENDPOINT
+# ==================================
 
 @app.post("/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    response = get_ai_chat_response_with_context(request.message, request.user_id if request.user_type == "student" else 0, db)
-    db.add(ChatHistory(user_id=request.user_id, user_type=request.user_type, message=request.message, response=response))
+    user_context = ""
+    if request.user_type == "student":
+        student = db.query(Student).filter(Student.id == request.user_id).first()
+        if student:
+            user_context = f"Student in {student.class_level}"
+    
+    response = get_ai_chat_response(request.message, user_context)
+    chat = ChatHistory(user_id=request.user_id, user_type=request.user_type, message=request.message, response=response)
+    db.add(chat)
     db.commit()
     return {"response": response}
 
+# ==================================
+# EXAM ENDPOINTS
+# ==================================
+
 @app.post("/generate-exam")
 def create_exam(request: ExamRequest, teacher_id: int, db: Session = Depends(get_db)):
-    result = generate_exam_ai(request.subject, request.chapter, request.class_level, request.duration, request.partA_bloom, request.partB_bloom, request.partC_bloom)
-    exam_data = json.loads(result.strip().replace("```json", "").replace("```", ""))
+    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=403, detail="Teacher not found")
+    
+    result = generate_exam_ai(
+        request.subject, request.chapter, request.class_level,
+        request.duration, request.partA_bloom, request.partB_bloom, request.partC_bloom
+    )
+    
+    clean_result = result.strip()
+    if clean_result.startswith("```"):
+        clean_result = clean_result.replace("```json", "").replace("```", "").strip()
+    
+    try:
+        exam_data = json.loads(clean_result)
+    except:
+        exam_data = json.loads(generate_exam_ai(request.subject, request.chapter, request.class_level,
+            request.duration, request.partA_bloom, request.partB_bloom, request.partC_bloom))
+    
     exam_id = "EXAM_" + uuid.uuid4().hex[:8].upper()
-    metadata = {"exam_id": exam_id, "class_level": request.class_level, "created_at": datetime.utcnow().isoformat(), "status": "DRAFT"}
+    metadata = {
+        "exam_id": exam_id,
+        "class_level": request.class_level,
+        "created_at": datetime.utcnow().isoformat(),
+        "status": "PUBLISHED" if APP_SETTINGS["AUTO_PUBLISH_EXAMS"] else "DRAFT"
+    }
+    
     exam = save_exam_to_db(db, metadata, exam_data, teacher_id)
-    return {"exam": exam_data, "exam_id": exam.id}
+    return {"metadata": metadata, "exam": exam_data, "exam_id": exam.id}
 
 @app.post("/publish-exam/{exam_id}")
 def publish_exam(exam_id: int, teacher_id: int, db: Session = Depends(get_db)):
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    if exam:
-        exam.status = "PUBLISHED"
-        db.commit()
-    return {"message": "Published"}
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    exam.status = "PUBLISHED"
+    db.commit()
+    return {"message": f"Exam {exam.exam_id} published successfully"}
 
 @app.get("/exams")
 def get_exams(db: Session = Depends(get_db)):
-    return [{"id": e.id, "exam_id": e.exam_id, "subject": e.subject, "chapter": e.chapter, "total_marks": e.total_marks} for e in db.query(Exam).all()]
+    exams = db.query(Exam).all()
+    return [{"id": e.id, "exam_id": e.exam_id, "subject": e.subject, "chapter": e.chapter, 
+             "class_level": e.class_level, "duration": e.duration, "total_marks": e.total_marks, 
+             "status": e.status} for e in exams]
+
+# ==================================
+# EXAM SUBMISSION ENDPOINTS
+# ==================================
 
 @app.post("/submit-exam/{student_id}/{exam_id}")
 def submit_exam(student_id: int, exam_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     student = db.query(Student).filter(Student.id == student_id).first()
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    
     if not student or not exam:
-        raise HTTPException(404, "Not found")
+        raise HTTPException(status_code=404, detail="Student or Exam not found")
+    
     file_path = os.path.join(UPLOAD_FOLDER, f"{student_id}_{exam_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    extracted = extract_text_from_file(file_path)
-    submission = Submission(student_id=student_id, exam_id=exam_id, uploaded_pdf_path=file_path, extracted_text=extracted, status="UPLOADED")
+    
+    # Extract text from file (mock for now)
+    extracted_text = "Sample answer text"
+    
+    submission = Submission(
+        student_id=student_id,
+        exam_id=exam_id,
+        uploaded_pdf_path=file_path,
+        extracted_text=extracted_text,
+        status="UPLOADED"
+    )
     db.add(submission)
     db.commit()
     db.refresh(submission)
+    
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
-    total = 0
-    weak = []
+    total_marks = 0
+    
     for q in questions:
-        eval_result = get_ai_evaluation(extracted or "", q.teacher_final_answer or "", q.max_marks)
-        marks = eval_result.get("marks", 0)
-        explanation = generate_ai_explanation(q.question_text, extracted or "", q.teacher_final_answer or "", marks, q.max_marks)
+        evaluation = get_ai_evaluation(extracted_text, q.teacher_final_answer or "", q.max_marks)
+        ai_marks = evaluation.get("marks", 0)
+        
         response = StudentResponse(
-            submission_id=submission.id, student_id=student_id, question_id=q.id, answer_text=extracted,
-            ai_marks_awarded=marks, ai_feedback=eval_result.get("feedback", ""), ai_explanation=explanation,
-            final_marks=marks
+            submission_id=submission.id,
+            student_id=student_id,
+            question_id=q.id,
+            answer_text=extracted_text,
+            ai_is_correct=ai_marks >= q.max_marks * 0.6,
+            ai_marks_awarded=ai_marks,
+            ai_feedback=evaluation.get("feedback", ""),
+            teacher_marks_awarded=ai_marks,
+            final_marks=ai_marks,
+            evaluated_status="AI_EVALUATED"
         )
         db.add(response)
-        total += marks
-        if marks < q.max_marks * 0.5:
-            weak.append(q.question_text[:50])
+        total_marks += ai_marks
+    
     submission.status = "AI_EVALUATED"
-    submission.ai_total_marks = total
-    submission.final_total_marks = total
-    submission.weak_topics = list(set(weak[:5]))
-    submission.predicted_next_score = predict_future_score(student_id, db)
+    submission.ai_total_marks = total_marks
+    submission.final_total_marks = total_marks
     db.commit()
-    award_badges(student_id, db)
-    update_leaderboard(student_id, db)
-    return {"submission_id": submission.id, "score": total, "percentage": (total/exam.total_marks*100) if exam.total_marks else 0}
+    
+    return {"message": "Exam evaluated", "submission_id": submission.id, "score": total_marks}
 
 @app.get("/student-dashboard/{student_id}")
 def student_dashboard(student_id: int, db: Session = Depends(get_db)):
     student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        return {"error": "Student not found"}
+    
     submissions = {s.exam_id: s for s in db.query(Submission).filter(Submission.student_id == student_id).all()}
-    exams = db.query(Exam).filter(Exam.status == "PUBLISHED", Exam.class_level == student.class_level).all() if student else []
+    exams = db.query(Exam).filter(Exam.status == "PUBLISHED", Exam.class_level == student.class_level).all()
+    
+    result = []
+    for e in exams:
+        submission = submissions.get(e.id)
+        result.append({
+            "exam_id": e.id,
+            "exam_name": e.exam_id,
+            "subject": e.subject,
+            "chapter": e.chapter,
+            "duration": e.duration,
+            "total_marks": e.total_marks,
+            "status": submission.status if submission else "NOT_ATTEMPTED",
+            "submission_id": submission.id if submission else None,
+            "score": submission.final_total_marks if submission else None
+        })
+    
+    completed = [s for s in submissions.values() if s.status in ["AI_EVALUATED", "RESULT_PUBLISHED"]]
+    avg_score = sum(s.final_total_marks for s in completed) / len(completed) if completed else 0
+    
     return {
-        "student": {"name": student.name, "streak_days": student.streak_days, "badges": student.badges},
-        "exams": [{"exam_id": e.id, "exam_name": e.exam_id, "subject": e.subject, "status": submissions.get(e.id).status if submissions.get(e.id) else "NOT_ATTEMPTED", "submission_id": submissions.get(e.id).id if submissions.get(e.id) else None} for e in exams],
-        "statistics": {"total_exams_taken": len([s for s in submissions.values() if s.status in ["AI_EVALUATED", "RESULT_PUBLISHED"]]), "total_published_exams": len(exams)}
+        "student": {"id": student.id, "name": student.name, "streak_days": student.streak_days, "badges": student.badges},
+        "exams": result,
+        "statistics": {"total_exams_taken": len(completed), "average_score": round(avg_score, 2), "total_published_exams": len(exams)}
     }
 
 @app.get("/submission-result/{submission_id}")
 def get_submission_result(submission_id: int, db: Session = Depends(get_db)):
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
     exam = db.query(Exam).filter(Exam.id == submission.exam_id).first()
     responses = db.query(StudentResponse).filter(StudentResponse.submission_id == submission_id).all()
+    
     questions = []
-    weak = []
     for r in responses:
         q = db.query(Question).filter(Question.id == r.question_id).first()
         if q:
-            percentage = (r.final_marks / q.max_marks) * 100 if q.max_marks else 0
-            if percentage < 50:
-                weak.append(q.question_text[:50])
-            questions.append({"question_number": q.question_number, "question_text": q.question_text, "marks_awarded": r.final_marks, "max_marks": q.max_marks, "ai_explanation": r.ai_explanation})
+            questions.append({
+                "question_number": q.question_number,
+                "question_text": q.question_text,
+                "marks_awarded": r.final_marks,
+                "max_marks": q.max_marks,
+                "ai_feedback": r.ai_feedback
+            })
+    
+    percentage = (submission.final_total_marks / exam.total_marks) * 100 if exam.total_marks else 0
+    
     return {
-        "total_marks": submission.final_total_marks, "max_marks": exam.total_marks,
-        "percentage": (submission.final_total_marks / exam.total_marks * 100) if exam.total_marks else 0,
-        "questions": questions, "weak_topics": list(set(weak[:3])),
-        "predicted_next_score": submission.predicted_next_score,
-        "behavior_analysis": analyze_student_behavior(submission.student_id, db)
+        "exam_name": exam.exam_id,
+        "total_marks": submission.final_total_marks,
+        "max_marks": exam.total_marks,
+        "percentage": round(percentage, 2),
+        "questions": questions,
+        "risk_level": submission.risk_level
     }
+
+@app.get("/submissions-for-review")
+def get_submissions_for_review(db: Session = Depends(get_db)):
+    submissions = db.query(Submission).filter(Submission.status.in_(["UPLOADED", "AI_EVALUATED"])).all()
+    result = []
+    for s in submissions:
+        student = db.query(Student).filter(Student.id == s.student_id).first()
+        exam = db.query(Exam).filter(Exam.id == s.exam_id).first()
+        result.append({
+            "id": s.id,
+            "student_name": student.name if student else "Unknown",
+            "exam_name": exam.exam_id if exam else "Unknown",
+            "subject": exam.subject if exam else "Unknown",
+            "risk_level": s.risk_level,
+            "status": s.status
+        })
+    return result
+
+@app.get("/submission-review/{submission_id}")
+def get_submission_review(submission_id: int, db: Session = Depends(get_db)):
+    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    student = db.query(Student).filter(Student.id == submission.student_id).first()
+    exam = db.query(Exam).filter(Exam.id == submission.exam_id).first()
+    responses = db.query(StudentResponse).filter(StudentResponse.submission_id == submission_id).all()
+    
+    questions = []
+    for r in responses:
+        q = db.query(Question).filter(Question.id == r.question_id).first()
+        if q:
+            questions.append({
+                "response_id": r.id,
+                "question_number": q.question_number,
+                "question_text": q.question_text,
+                "student_answer": r.answer_text or "[No answer]",
+                "max_marks": q.max_marks,
+                "ai_marks": r.ai_marks_awarded,
+                "ai_feedback": r.ai_feedback or "No feedback",
+                "teacher_marks": r.teacher_marks_awarded,
+                "final_marks": r.final_marks
+            })
+    
+    return {
+        "submission_id": submission.id,
+        "student_name": student.name if student else "Unknown",
+        "exam_name": exam.exam_id if exam else "Unknown",
+        "subject": exam.subject if exam else "Unknown",
+        "status": submission.status,
+        "ai_total_marks": submission.ai_total_marks,
+        "final_total_marks": submission.final_total_marks,
+        "questions": questions
+    }
+
+@app.post("/teacher-review/{submission_id}")
+def teacher_review(submission_id: int, updates: List[TeacherReviewItem], db: Session = Depends(get_db)):
+    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    total_marks = 0
+    for item in updates:
+        response = db.query(StudentResponse).filter(
+            StudentResponse.id == item.response_id,
+            StudentResponse.submission_id == submission_id
+        ).first()
+        if response:
+            response.teacher_marks_awarded = item.teacher_marks
+            response.teacher_feedback = item.teacher_feedback
+            response.teacher_override = item.teacher_override
+            response.final_marks = item.teacher_marks
+            total_marks += item.teacher_marks
+    
+    submission.final_total_marks = total_marks
+    submission.status = "TEACHER_REVIEWED"
+    db.commit()
+    
+    return {"message": "Review saved", "total_marks": total_marks}
+
+@app.post("/publish-result/{submission_id}")
+def publish_result(submission_id: int, db: Session = Depends(get_db)):
+    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    submission.status = "RESULT_PUBLISHED"
+    db.commit()
+    award_badges(submission.student_id, db)
+    update_leaderboard(submission.student_id, db)
+    
+    return {"message": "Result published"}
 
 @app.get("/leaderboard")
 def get_leaderboard_api(db: Session = Depends(get_db)):
     return get_leaderboard(db)
 
-@app.get("/generate-certificate/{submission_id}")
-def generate_certificate_api(submission_id: int, db: Session = Depends(get_db)):
-    submission = db.query(Submission).filter(Submission.id == submission_id).first()
-    if not submission:
-        raise HTTPException(404, "Not found")
-    pdf = generate_certificate(submission.student_id, submission.exam_id, db)
-    return FileResponse(pdf, media_type="application/pdf", filename=f"certificate_{submission_id}.pdf")
+@app.get("/notifications/{user_id}/{user_type}")
+def get_notifications(user_id: int, user_type: str, db: Session = Depends(get_db)):
+    if user_type == "student":
+        notifications = db.query(Notification).filter(Notification.student_id == user_id).order_by(Notification.created_at.desc()).all()
+    else:
+        notifications = db.query(Notification).filter(Notification.teacher_id == user_id).order_by(Notification.created_at.desc()).all()
+    return [{"id": n.id, "title": n.title, "message": n.message, "type": n.type, "is_read": n.is_read, "created_at": n.created_at} for n in notifications]
 
-@app.get("/career-guidance/{student_id}")
-def get_career_guidance(student_id: int, db: Session = Depends(get_db)):
-    guidance = db.query(CareerGuidance).filter(CareerGuidance.student_id == student_id).first()
-    return {"has_data": bool(guidance), "recommendations": guidance.recommendations if guidance else ""}
+@app.post("/mark-notification-read/{notification_id}")
+def mark_notification_read(notification_id: int, db: Session = Depends(get_db)):
+    notification = db.query(Notification).filter(Notification.id == notification_id).first()
+    if notification:
+        notification.is_read = True
+        db.commit()
+    return {"success": True}
+
+@app.get("/exam-analytics/{exam_id}")
+def exam_analytics(exam_id: int, db: Session = Depends(get_db)):
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    submissions = db.query(Submission).filter(Submission.exam_id == exam_id).all()
+    scores = [s.final_total_marks for s in submissions if s.final_total_marks]
+    
+    return {
+        "exam_name": exam.exam_id,
+        "total_students": len(submissions),
+        "average_score": sum(scores) / len(scores) if scores else 0,
+        "highest_score": max(scores) if scores else 0,
+        "lowest_score": min(scores) if scores else 0
+    }
 
 @app.post("/career-guidance/{student_id}")
 def save_career_guidance(student_id: int, career_interests: str = Form(None), db: Session = Depends(get_db)):
-    guidance = db.query(CareerGuidance).filter(CareerGuidance.student_id == student_id).first()
-    if guidance:
-        guidance.career_interests = career_interests
+    existing = db.query(CareerGuidance).filter(CareerGuidance.student_id == student_id).first()
+    if existing:
+        existing.career_interests = career_interests
     else:
         guidance = CareerGuidance(student_id=student_id, career_interests=career_interests)
         db.add(guidance)
     db.commit()
     return {"success": True}
 
-@app.get("/generate-practice-test/{student_id}/{topic}")
-def generate_practice_test_api(student_id: int, topic: str, db: Session = Depends(get_db)):
-    return generate_practice_test(topic, 3)
-
-@app.get("/exam-analytics/{exam_id}")
-def exam_analytics(exam_id: int, db: Session = Depends(get_db)):
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    submissions = db.query(Submission).filter(Submission.exam_id == exam_id).all()
-    scores = [s.final_total_marks for s in submissions if s.final_total_marks]
-    return {
-        "exam_name": exam.exam_id, "total_students": len(submissions),
-        "average_score": sum(scores)/len(scores) if scores else 0,
-        "highest_score": max(scores) if scores else 0,
-        "lowest_score": min(scores) if scores else 0
-    }
-
-@app.get("/student-behavior/{student_id}")
-def get_student_behavior(student_id: int, db: Session = Depends(get_db)):
-    return analyze_student_behavior(student_id, db)
-
-@app.post("/bulk-upload")
-async def bulk_upload(exam_id: int, zip_file: UploadFile = File(...), db: Session = Depends(get_db)):
-    zip_path = os.path.join(BULK_UPLOAD_FOLDER, f"bulk_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip")
-    with open(zip_path, "wb") as buffer:
-        shutil.copyfileobj(zip_file.file, buffer)
-    extract_path = os.path.join(BULK_UPLOAD_FOLDER, f"extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    os.makedirs(extract_path, exist_ok=True)
-    with zipfile.ZipFile(zip_path, 'r') as zf:
-        zf.extractall(extract_path)
-    results = []
-    for student_folder in os.listdir(extract_path):
-        student_path = os.path.join(extract_path, student_folder)
-        if os.path.isdir(student_path):
-            student = db.query(Student).filter(Student.student_id == student_folder).first()
-            if student:
-                for file in os.listdir(student_path):
-                    if file.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg')):
-                        with open(os.path.join(student_path, file), 'rb') as f:
-                            r = requests.post(f"http://localhost:8000/submit-exam/{student.id}/{exam_id}", files={"file": f})
-                            results.append({"student": student_folder, "status": "Success" if r.status_code == 200 else "Failed"})
-    return {"results": results}
+@app.get("/career-guidance/{student_id}")
+def get_career_guidance(student_id: int, db: Session = Depends(get_db)):
+    guidance = db.query(CareerGuidance).filter(CareerGuidance.student_id == student_id).first()
+    if not guidance:
+        return {"has_data": False}
+    return {"has_data": True, "career_interests": guidance.career_interests, "recommendations": "Explore careers based on your interests!"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
